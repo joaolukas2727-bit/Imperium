@@ -1,90 +1,109 @@
-// api/webhook.js
 export default async function handler(req, res) {
+  // ====== ENV VARS ======
   const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
   const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+  const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+  const API_VERSION = process.env.META_API_VERSION || "v20.0";
 
-  // 1) Verificação do webhook (GET)
+  // ====== VERIFICATION (GET) ======
   if (req.method === "GET") {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
-    if (mode === "subscribe" && token === VERIFY_TOKEN) {
-      return res.status(200).send(challenge);
+    try {
+      const mode = req.query["hub.mode"];
+      const token = req.query["hub.verify_token"];
+      const challenge = req.query["hub.challenge"];
+
+      if (mode && token && mode === "subscribe" && token === VERIFY_TOKEN) {
+        console.log("Webhook verificado com sucesso.");
+        return res.status(200).send(challenge);
+      } else {
+        console.warn("Falha na verificação do webhook: token inválido.");
+        return res.sendStatus(403);
+      }
+    } catch (e) {
+      console.error("Erro no GET /webhook:", e);
+      return res.sendStatus(500);
     }
-    return res.status(403).send("Forbidden");
   }
 
-  // 2) Recebimento de eventos (POST)
+  // ====== RECEIVE MESSAGE (POST) ======
   if (req.method === "POST") {
     try {
-      const data = req.body || {};
-      console.log("📩 Webhook recebido:", JSON.stringify(data, null, 2));
+      // Sempre responda rápido com 200 OK ao Meta (até 10s).
+      // Vamos processar a mensagem e enviar a resposta logo em seguida.
+      const body = req.body;
+      console.log("Webhook recebido:", JSON.stringify(body, null, 2));
 
-      const value = data?.entry?.[0]?.changes?.[0]?.value;
-      const phoneNumberId = value?.metadata?.phone_number_id;
-      const msg = value?.messages?.[0];
-      const from = msg?.from;
-      const text = msg?.text?.body;
+      // Checagem mínima de estrutura
+      const entry = body?.entry?.[0];
+      const changes = entry?.changes?.[0];
+      const value = changes?.value;
 
-      console.log("🔎 DEBUG:", {
-        hasToken: Boolean(ACCESS_TOKEN),
-        phoneNumberId,
-        from,
-        text,
-        type: msg?.type
-      });
-
-      // Só tenta responder se temos tudo necessário
-      if (msg?.type === "text" && phoneNumberId && from && ACCESS_TOKEN) {
-        // 2.1 Tenta responder texto livre (dentro da janela de 24h)
-        const sendFree = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${ACCESS_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            messaging_product: "whatsapp",
-            to: from,
-            text: { body: "✅ Recebido!" },
-          }),
-        });
-
-        const freeText = await sendFree.text();
-        console.log("⬆️ Envio texto livre:", sendFree.status, freeText);
-
-        // 2.2 Se fora da janela (erro 131000), faz fallback com TEMPLATE "teste"
-        if (!sendFree.ok && freeText.includes('"code":131000')) {
-          const sendTpl = await fetch(`https://graph.facebook.com/v20.0/${phoneNumberId}/messages`, {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${ACCESS_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              messaging_product: "whatsapp",
-              to: from,
-              type: "template",
-              template: {
-                name: "teste",           // seu template aprovado
-                language: { code: "pt_BR" }
-              }
-            }),
-          });
-          const tplText = await sendTpl.text();
-          console.log("⬆️ Envio TEMPLATE:", sendTpl.status, tplText);
-        }
-      } else {
-        console.log("⛔ Não respondeu (faltou token/ID/from ou não é texto).");
+      // Às vezes chegam eventos "statuses" (entregue/lida). Só respondemos a "messages".
+      const messageObj = value?.messages?.[0];
+      if (!messageObj) {
+        // Não é mensagem do usuário (pode ser status). Retornamos 200 e encerramos.
+        return res.status(200).json({ received: true, type: "non-message-event" });
       }
 
-      return res.status(200).json({ status: "ok" });
+      // Dados principais
+      const from = messageObj.from; // "55349..."
+      const textBody = messageObj.text?.body || "";
+
+      // Montar o "to" (E.164) — adiciona o '+'
+      const to = from.startsWith("+") ? from : `+${from}`;
+
+      // Defina aqui a resposta que quer mandar (texto livre dentro de 24h)
+      const replyText = textBody
+        ? `Recebi: "${textBody}". Teste OK ✅`
+        : "Recebi sua mensagem. Tudo certo! ✅";
+
+      // Monta payload de sessão (texto livre) – válido se dentro da janela de 24h
+      const sessionPayload = {
+        messaging_product: "whatsapp",
+        to,
+        type: "text",
+        text: { body: replyText },
+      };
+
+      // Envia para Graph
+      const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
+      const graphResp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(sessionPayload),
+      });
+
+      const graphData = await graphResp.json();
+      console.log("Resposta do Graph:", graphResp.status, JSON.stringify(graphData, null, 2));
+
+      if (!graphResp.ok) {
+        // Erros comuns: 190 (token), 100 (ID), 200/10x/131047 (permissões/assets), 470 (24h)
+        // Se for fora de 24h, você pode cair para TEMPLATE aqui.
+        return res.status(200).json({
+          received: true,
+          sent: false,
+          errorFromGraph: { status: graphResp.status, data: graphData },
+        });
+      }
+
+      // Sucesso
+      return res.status(200).json({
+        received: true,
+        sent: true,
+        graphMessageId: graphData?.messages?.[0]?.id || null,
+      });
     } catch (e) {
-      console.error("❌ Erro no webhook:", e);
-      return res.status(200).json({ status: "ok" });
+      console.error("Erro no POST /webhook:", e);
+      // Mesmo em erro interno, responda 200 para não quebrar a assinatura
+      return res.status(200).json({ received: true, sent: false, internalError: true });
     }
   }
 
-  return res.status(405).send("Method Not Allowed");
+  // ====== MÉTODO NÃO SUPORTADO ======
+  res.setHeader("Allow", "GET, POST");
+  return res.status(405).end("Method Not Allowed");
 }
 
