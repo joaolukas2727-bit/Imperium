@@ -3,15 +3,13 @@ import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Dica: mantenha essas variáveis já existentes na Vercel
-// ACCESS_TOKEN: token do WhatsApp Graph
-// PHONE_NUMBER_ID: ID do número do WhatsApp Business (ex.: 123456789012345)
-// VERIFY_TOKEN: o mesmo usado no setup do webhook (para GET de verificação)
+// Variáveis esperadas na Vercel:
+// ACCESS_TOKEN, PHONE_NUMBER_ID, VERIFY_TOKEN, OPENAI_API_KEY
 
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
-      // Verificação do webhook do Meta (challenge)
+      // Verificação do webhook do Meta
       const mode = req.query["hub.mode"];
       const token = req.query["hub.verify_token"];
       const challenge = req.query["hub.challenge"];
@@ -26,70 +24,79 @@ export default async function handler(req, res) {
     }
 
     const body = req.body || {};
-    // Navega no payload do WhatsApp
+    // Proteções para navegar no payload do WhatsApp
     const entry = body.entry?.[0];
     const change = entry?.changes?.[0];
     const value = change?.value;
-    const msg = value?.messages?.[0];
 
-    // Ignore se não houver mensagem de texto do usuário
-    if (!msg || msg.type !== "text") {
-      return res.status(200).json({ status: "ignored" });
+    const msg = value?.messages?.[0];
+    if (!msg) {
+      console.log("Sem messages no payload:", JSON.stringify(body));
+      return res.status(200).json({ status: "no_message" });
     }
 
-    const userNumber = msg.from; // WhatsApp ID do remetente
-    const userText = msg.text?.body?.trim() ?? "";
+    // Ignore tudo que não for texto puro
+    if (msg.type !== "text" || !msg.text?.body) {
+      console.log("Mensagem não-texto ou sem body:", JSON.stringify(msg));
+      return res.status(200).json({ status: "ignored_non_text" });
+    }
 
-    // Prompt do Jarvis (tom Imperium, PT-BR, respostas objetivas)
-    const instructions = [
+    const userNumber = msg.from;
+    const userText = (msg.text.body || "").trim();
+
+    // Prompt enxuto do Jarvis
+    const systemPrompt = [
       "Você é o Jarvis, assistente financeiro do Imperium.",
-      "Fale em PT-BR, objetivo, elegante e claro.",
-      "Se o assunto for finanças pessoais/negócios, dê passos práticos.",
-      "Não invente links. Se não souber, diga brevemente o que precisa para ajudar.",
+      "Fale em PT-BR, objetivo e elegante.",
+      "Se for finanças/negócios, dê passos práticos.",
+      "Se não souber, peça o dado necessário sem inventar."
     ].join(" ");
 
-    // Chamada à OpenAI (Responses API – recomendada)
-    const ai = await openai.responses.create({
+    // === OpenAI: Chat Completions (estável) ===
+    const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      instructions,
-      input: `Usuário (${userNumber}): ${userText}`,
-      max_output_tokens: 400, // contém custo
       temperature: 0.4,
+      max_tokens: 350,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userText }
+      ]
     });
 
     const aiText =
-      ai.output_text?.trim() ||
-      "Tive um problema técnico ao formular a resposta. Pode tentar novamente?";
+      completion.choices?.[0]?.message?.content?.trim() ||
+      "Tive um problema ao formular a resposta. Pode tentar novamente?";
 
-    // Envia a resposta de volta pelo Graph
+    // === Enviar de volta pelo Graph ===
     const graphUrl = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
     const payload = {
       messaging_product: "whatsapp",
       to: userNumber,
       type: "text",
-      text: { body: aiText },
+      text: { body: aiText }
     };
 
     const r = await fetch(graphUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
 
     if (!r.ok) {
-      const err = await r.text();
-      console.error("Graph error:", r.status, err);
-      // Mesmo com erro no envio, respondemos 200 para o Meta não re-tentar indefinidamente
-      return res.status(200).json({ status: "graph_error", detail: err });
+      const errText = await r.text();
+      console.error("Graph error:", r.status, errText);
+      // Retornamos 200 para não entrar em loop de reentrega do Meta
+      return res.status(200).json({ status: "graph_error", detail: errText });
     }
 
+    console.log("Mensagem enviada com sucesso para:", userNumber);
     return res.status(200).json({ status: "sent" });
   } catch (e) {
     console.error("Webhook error:", e);
-    // Respondemos 200 para evitar reentrega em loop
+    // Retornamos 200 para evitar reentrega em loop
     return res.status(200).json({ status: "error", message: String(e) });
   }
 }
@@ -97,7 +104,7 @@ export default async function handler(req, res) {
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: "1mb",
-    },
-  },
+      sizeLimit: "1mb"
+    }
+  }
 };
