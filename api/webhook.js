@@ -66,7 +66,7 @@ export default async function handler(req, res) {
       };
 
       // Envia para Graph
-      const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
+      const url = `https://graph.facebook.com/${{API_VERSION}}/${{PHONE_NUMBER_ID}}/messages`;
       const graphResp = await fetch(url, {
         method: "POST",
         headers: {
