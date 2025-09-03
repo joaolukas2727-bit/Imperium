@@ -1,108 +1,103 @@
-export default async function handler(req, res) {
-  // ====== ENV VARS ======
-  const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-  const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-  const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-  const API_VERSION = process.env.META_API_VERSION || "v20.0";
+// api/webhook.js
+import OpenAI from "openai";
 
-  // ====== VERIFICATION (GET) ======
-  if (req.method === "GET") {
-    try {
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Dica: mantenha essas variáveis já existentes na Vercel
+// ACCESS_TOKEN: token do WhatsApp Graph
+// PHONE_NUMBER_ID: ID do número do WhatsApp Business (ex.: 123456789012345)
+// VERIFY_TOKEN: o mesmo usado no setup do webhook (para GET de verificação)
+
+export default async function handler(req, res) {
+  try {
+    if (req.method === "GET") {
+      // Verificação do webhook do Meta (challenge)
       const mode = req.query["hub.mode"];
       const token = req.query["hub.verify_token"];
       const challenge = req.query["hub.challenge"];
-
-      if (mode && token && mode === "subscribe" && token === VERIFY_TOKEN) {
-        console.log("Webhook verificado com sucesso.");
+      if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
         return res.status(200).send(challenge);
-      } else {
-        console.warn("Falha na verificação do webhook: token inválido.");
-        return res.sendStatus(403);
       }
-    } catch (e) {
-      console.error("Erro no GET /webhook:", e);
-      return res.sendStatus(500);
+      return res.status(403).send("Forbidden");
     }
-  }
 
-  // ====== RECEIVE MESSAGE (POST) ======
-  if (req.method === "POST") {
-    try {
-      // Sempre responda rápido com 200 OK ao Meta (até 10s).
-      // Vamos processar a mensagem e enviar a resposta logo em seguida.
-      const body = req.body;
-      console.log("Webhook recebido:", JSON.stringify(body, null, 2));
-
-      // Checagem mínima de estrutura
-      const entry = body?.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const value = changes?.value;
-
-      // Às vezes chegam eventos "statuses" (entregue/lida). Só respondemos a "messages".
-      const messageObj = value?.messages?.[0];
-      if (!messageObj) {
-        // Não é mensagem do usuário (pode ser status). Retornamos 200 e encerramos.
-        return res.status(200).json({ received: true, type: "non-message-event" });
-      }
-
-      // Dados principais
-      const from = messageObj.from; // "55349..."
-      const textBody = messageObj.text?.body || "";
-
-      // Montar o "to" (E.164) — adiciona o '+'
-      const to = from.startsWith("+") ? from : `+${from}`;
-
-      // Defina aqui a resposta que quer mandar (texto livre dentro de 24h)
-      const replyText = textBody
-        ? `Recebi: "${textBody}". Teste OK ✅`
-        : "Recebi sua mensagem. Tudo certo! ✅";
-
-      // Monta payload de sessão (texto livre) – válido se dentro da janela de 24h
-      const sessionPayload = {
-        messaging_product: "whatsapp",
-        to,
-        type: "text",
-        text: { body: replyText },
-      };
-
-      // Envia para Graph
-      const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
-      const graphResp = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(sessionPayload),
-      });
-
-      const graphData = await graphResp.json();
-      console.log("Resposta do Graph:", graphResp.status, JSON.stringify(graphData, null, 2));
-
-      if (!graphResp.ok) {
-        // Erros comuns: 190 (token), 100 (ID), 200/10x/131047 (permissões/assets), 470 (24h)
-        // Se for fora de 24h, você pode cair para TEMPLATE aqui.
-        return res.status(200).json({
-          received: true,
-          sent: false,
-          errorFromGraph: { status: graphResp.status, data: graphData },
-        });
-      }
-
-      // Sucesso
-      return res.status(200).json({
-        received: true,
-        sent: true,
-        graphMessageId: graphData?.messages?.[0]?.id || null,
-      });
-    } catch (e) {
-      console.error("Erro no POST /webhook:", e);
-      // Mesmo em erro interno, responda 200 para não quebrar a assinatura
-      return res.status(200).json({ received: true, sent: false, internalError: true });
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
     }
-  }
 
-  // ====== MÉTODO NÃO SUPORTADO ======
-  res.setHeader("Allow", "GET, POST");
-  return res.status(405).end("Method Not Allowed");
+    const body = req.body || {};
+    // Navega no payload do WhatsApp
+    const entry = body.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+    const msg = value?.messages?.[0];
+
+    // Ignore se não houver mensagem de texto do usuário
+    if (!msg || msg.type !== "text") {
+      return res.status(200).json({ status: "ignored" });
+    }
+
+    const userNumber = msg.from; // WhatsApp ID do remetente
+    const userText = msg.text?.body?.trim() ?? "";
+
+    // Prompt do Jarvis (tom Imperium, PT-BR, respostas objetivas)
+    const instructions = [
+      "Você é o Jarvis, assistente financeiro do Imperium.",
+      "Fale em PT-BR, objetivo, elegante e claro.",
+      "Se o assunto for finanças pessoais/negócios, dê passos práticos.",
+      "Não invente links. Se não souber, diga brevemente o que precisa para ajudar.",
+    ].join(" ");
+
+    // Chamada à OpenAI (Responses API – recomendada)
+    const ai = await openai.responses.create({
+      model: "gpt-4o-mini",
+      instructions,
+      input: `Usuário (${userNumber}): ${userText}`,
+      max_output_tokens: 400, // contém custo
+      temperature: 0.4,
+    });
+
+    const aiText =
+      ai.output_text?.trim() ||
+      "Tive um problema técnico ao formular a resposta. Pode tentar novamente?";
+
+    // Envia a resposta de volta pelo Graph
+    const graphUrl = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+    const payload = {
+      messaging_product: "whatsapp",
+      to: userNumber,
+      type: "text",
+      text: { body: aiText },
+    };
+
+    const r = await fetch(graphUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!r.ok) {
+      const err = await r.text();
+      console.error("Graph error:", r.status, err);
+      // Mesmo com erro no envio, respondemos 200 para o Meta não re-tentar indefinidamente
+      return res.status(200).json({ status: "graph_error", detail: err });
+    }
+
+    return res.status(200).json({ status: "sent" });
+  } catch (e) {
+    console.error("Webhook error:", e);
+    // Respondemos 200 para evitar reentrega em loop
+    return res.status(200).json({ status: "error", message: String(e) });
+  }
 }
+
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "1mb",
+    },
+  },
+};
