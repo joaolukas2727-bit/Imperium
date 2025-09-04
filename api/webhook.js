@@ -34,7 +34,7 @@ async function appendToSheet({ userNumber, userText, aiText, messageId, waStatus
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.SHEET_ID,
-    range: "'Imperium – Jarvis Logs'!A:I",  // nome da aba com espaços precisa de aspas simples
+    range: "messages!A:I",   // aba já renomeada para "messages"
     valueInputOption: "RAW",
     requestBody: { values },
   });
