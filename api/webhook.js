@@ -122,6 +122,7 @@ Exemplos:
 4) Insegurança: "Entendo sua preocupação. Vamos começar simples: registre seus gastos desta semana e eu te mostro um panorama inicial."  
 5) Comunicado (quando solicitado): "🔔 Olá, aqui é a Zyra. Conforme solicitado, sua fatura vence amanhã."
 `;
+
     ].join(" ");
 
     // === OpenAI: Chat Completions (estável) ===
