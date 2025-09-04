@@ -1,10 +1,45 @@
 // api/webhook.js
 import OpenAI from "openai";
+import { google } from "googleapis";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Variáveis esperadas na Vercel:
 // ACCESS_TOKEN, PHONE_NUMBER_ID, VERIFY_TOKEN, OPENAI_API_KEY
+// GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, SHEET_ID
+
+// -------- Google Sheets helper ----------
+async function appendToSheet({ userNumber, userText, aiText, messageId, waStatus, modelUsed, tokens, latency }) {
+  const auth = new google.auth.JWT(
+    process.env.GOOGLE_CLIENT_EMAIL,
+    null,
+    // Converte '\n' literais em quebras de linha reais
+    process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+    ["https://www.googleapis.com/auth/spreadsheets"]
+  );
+
+  const sheets = google.sheets({ version: "v4", auth });
+
+  const values = [[
+    new Date().toISOString(),  // timestamp_utc
+    userNumber || "",
+    userText || "",
+    aiText || "",
+    messageId || "",
+    waStatus || "",
+    modelUsed || "gpt-4o-mini",
+    tokens || "",
+    latency || ""
+  ]];
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.SHEET_ID,
+    range: "'Imperium – Jarvis Logs'!A:I",  // nome da aba com espaços precisa de aspas simples
+    valueInputOption: "RAW",
+    requestBody: { values },
+  });
+}
+// ----------------------------------------
 
 export default async function handler(req, res) {
   try {
@@ -53,6 +88,7 @@ export default async function handler(req, res) {
     ].join(" ");
 
     // === OpenAI: Chat Completions (estável) ===
+    const t0 = Date.now();
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.4,
@@ -62,6 +98,7 @@ export default async function handler(req, res) {
         { role: "user", content: userText }
       ]
     });
+    const latencyMs = Date.now() - t0;
 
     const aiText =
       completion.choices?.[0]?.message?.content?.trim() ||
@@ -85,11 +122,32 @@ export default async function handler(req, res) {
       body: JSON.stringify(payload)
     });
 
+    let waStatus = "sent";
     if (!r.ok) {
       const errText = await r.text();
       console.error("Graph error:", r.status, errText);
-      // Retornamos 200 para não entrar em loop de reentrega do Meta
-      return res.status(200).json({ status: "graph_error", detail: errText });
+      waStatus = `graph_error_${r.status}`;
+      // Mesmo com erro no envio, seguimos respondendo 200 para não gerar loop de reentrega do Meta
+    }
+
+    // === Registrar no Google Sheets (após tentar enviar) ===
+    try {
+      await appendToSheet({
+        userNumber,
+        userText,
+        aiText,
+        messageId: msg.id,
+        waStatus,
+        modelUsed: "gpt-4o-mini",
+        tokens: "",          // opcional: preencher se você for contabilizar
+        latency: latencyMs
+      });
+    } catch (logErr) {
+      console.error("Falha ao registrar no Sheets:", logErr);
+    }
+
+    if (!r.ok) {
+      return res.status(200).json({ status: "graph_error" });
     }
 
     console.log("Mensagem enviada com sucesso para:", userNumber);
