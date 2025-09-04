@@ -8,7 +8,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // ACCESS_TOKEN, PHONE_NUMBER_ID, VERIFY_TOKEN, OPENAI_API_KEY
 // GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, SHEET_ID
 
-// -------- Google Sheets helper ----------
+// -------- Google Sheets helper --------
 async function appendToSheet({ userNumber, userText, aiText, messageId, waStatus, modelUsed, tokens, latency }) {
   const auth = new google.auth.JWT(
     process.env.GOOGLE_CLIENT_EMAIL,
@@ -21,7 +21,7 @@ async function appendToSheet({ userNumber, userText, aiText, messageId, waStatus
   const sheets = google.sheets({ version: "v4", auth });
 
   const values = [[
-    new Date().toISOString(),  // timestamp_utc
+    new Date().toISOString(),   // timestamp_utc
     userNumber || "",
     userText || "",
     aiText || "",
@@ -39,7 +39,7 @@ async function appendToSheet({ userNumber, userText, aiText, messageId, waStatus
     requestBody: { values },
   });
 }
-// ----------------------------------------
+// -------------------------------------
 
 export default async function handler(req, res) {
   try {
@@ -79,8 +79,8 @@ export default async function handler(req, res) {
     const userNumber = msg.from;
     const userText = (msg.text.body || "").trim();
 
-// Prompt enxuto da Zyra
-const systemPrompt = `
+    // ===== Prompt enxuto da Zyra (template string, sem join) =====
+    const systemPrompt = `
 Você é a Zyra, assistente financeiro da Zenor. 
 Função: registrar gastos, organizar finanças pessoais e orientar com passos práticos.
 
@@ -122,8 +122,7 @@ Exemplos:
 4) Insegurança: "Entendo sua preocupação. Vamos começar simples: registre seus gastos desta semana e eu te mostro um panorama inicial."  
 5) Comunicado (quando solicitado): "🔔 Olá, aqui é a Zyra. Conforme solicitado, sua fatura vence amanhã."
 `;
-
-    ].join(" ");
+    // ============================================================
 
     // === OpenAI: Chat Completions (estável) ===
     const t0 = Date.now();
@@ -155,7 +154,7 @@ Exemplos:
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(payload)
     });
