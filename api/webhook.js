@@ -1,13 +1,23 @@
-// ================== INÍCIO DO ARQUIVO ==================
+// ============== INÍCIO DO ARQUIVO ==============
 // api/webhook.js
+
 import OpenAI from "openai";
 import { google } from "googleapis";
 import { consultarGastosPorCategoria } from "./gastos.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// -------- Google Sheets helper --------
-async function appendToSheet({ userNumber, userText, aiText, messageId, waStatus, modelUsed, tokens, latency }) {
+// ------- Google Sheets helper -------
+async function appendToSheet({
+  userNumber,
+  userText,
+  aiText,
+  messageId,
+  waStatus,
+  modelUsed,
+  tokens,
+  latency,
+}) {
   const auth = new google.auth.JWT(
     process.env.GOOGLE_CLIENT_EMAIL,
     null,
@@ -37,13 +47,14 @@ async function appendToSheet({ userNumber, userText, aiText, messageId, waStatus
   });
 }
 
-// --------------------------------------
+// ------- Webhook Handler -------
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const mode = req.query["hub.mode"];
       const token = req.query["hub.verify_token"];
       const challenge = req.query["hub.challenge"];
+
       if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
         return res.status(200).send(challenge);
       }
@@ -73,70 +84,61 @@ export default async function handler(req, res) {
     const userNumber = msg.from;
     const userText = (msg.text.body || "").trim();
 
-    // Caso o usuário pergunte algo como: "quanto gastei este mês com alimentação"
+    // Verifica se a mensagem é uma consulta de gastos por categoria
     const matchConsulta = userText.match(/quanto\s+gastei.*?(alimentacao|alimentação|transporte|lazer|moradia|educacao|educação|outros)/i);
+
     if (matchConsulta) {
       const categoria = matchConsulta[1].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      try {
-        const total = await consultarGastosPorCategoria({ userNumber, categoria, periodo: "mes_atual" });
-        const textoResposta = `Você registrou R$ ${total.toFixed(2).replace('.', ',')} em ${categoria} neste mês. Deseja ver o detalhamento por semana ou adicionar outro gasto?`;
+      const total = await consultarGastosPorCategoria({ userNumber, categoria, periodo: "mes_atual" });
 
-        const graphUrl = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-        const payload = {
-          messaging_product: "whatsapp",
-          to: userNumber,
-          type: "text",
-          text: { body: textoResposta }
-        };
+      const textoResposta = total > 0
+        ? `Você registrou R$ ${total.toFixed(2).replace('.', ',')} em ${categoria} neste mês. Deseja ver o detalhamento por semana ou adicionar outro gasto?`
+        : `Por segurança, não encontrei gastos registrados neste mês vinculados ao seu número. Se desejar, posso ajudar a registrar esse valor ou esclarecer algo mais.`;
 
-        const r = await fetch(graphUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
-        });
+      const graphUrl = `https://graph.facebook.com/v17.0/${process.env.PHONE_NUMBER_ID}/messages`;
+      const payload = {
+        messaging_product: "whatsapp",
+        to: userNumber,
+        type: "text",
+        text: { body: textoResposta },
+      };
 
-        await appendToSheet({
-          userNumber,
-          userText,
-          aiText: textoResposta,
-          messageId: msg.id,
-          waStatus: r.ok ? "sent" : `graph_error_${r.status}`,
-          modelUsed: "consulta-direta",
-          tokens: "",
-          latency: 0
-        });
+      const r = await fetch(graphUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
 
-        return res.status(200).json({ status: "sent_consulta_categoria" });
-      } catch (e) {
-        console.error("Erro ao consultar categoria:", e);
-      }
+      await appendToSheet({
+        userNumber,
+        userText,
+        aiText: textoResposta,
+        messageId: msg.id,
+        waStatus: r.ok ? "sent" : `graph_error_${r.status}`,
+        modelUsed: "consulta-direta",
+        tokens: "",
+        latency: 0,
+      });
+
+      return res.status(200).json({ status: "sent_consulta_categoria" });
     }
 
+    // ===== Prompt Padrão (GPT)
     const systemPrompt = `
 Você é a Zyra, assistente financeiro da Zenor.
 
-Sua missão é ajudar o usuário a controlar os gastos com clareza, objetividade e inteligência. Você já tem acesso ao número da pessoa (userNumber) e pode filtrar automaticamente os registros da planilha sem precisar pedir nada.
+Missão: ajudar o usuário a decidir rápido e melhor sobre dinheiro, com clareza e inteligência.
 
-⚠️ REGRAS
-- Nunca exiba dados que não pertençam ao número que enviou a mensagem.
-- Quando não houver registros, diga: "Você ainda não registrou nenhum gasto este mês. Quer adicionar agora?"
-
-🎯 ESTILO DE RESPOSTA
-- Seja humana, direta e estratégica.
-- Não se apresente novamente após a primeira vez.
-- Evite frases vazias como "Estou à disposição", "Como posso ajudar?", etc.
-- Fale com naturalidade, como um assistente real.
-
-📌 EXEMPLOS DE RESPOSTAS BOAS
-- "Você registrou R$ 50,00 em supermercado este mês. Deseja adicionar esse valor ao controle ou ver um resumo completo?"
-- "Você ainda não registrou gastos este mês. Me diga o valor e a categoria para começar."
-- "Total de gastos em setembro até agora: R$ 280,00. Deseja ver por categoria ou por semana?"
-
-💡 DICA FINAL
-- Sempre responda com o próximo passo: adicionar gasto, ver resumo, detalhar semana/categoria, etc.
+Regras:
+- Apresente-se apenas na primeira interação.
+- Nunca retorne dados financeiros que não sejam do número de quem está enviando a mensagem.
+- Sempre use linguagem simples, acessível, objetiva e consultiva.
+- Use frases como: "Você registrou R$ X,XX", "Minha recomendação estratégica é...", "Próximos passos (em ordem): ..."
+- Quando o usuário perguntar por totais, certifique-se de que o dado seja filtrado por número, categoria e período.
+- Se não for possível garantir a verificação de identidade, diga: "Por segurança, não encontrei registros vinculados ao seu número."
 `;
 
     const t0 = Date.now();
@@ -146,29 +148,29 @@ Sua missão é ajudar o usuário a controlar os gastos com clareza, objetividade
       max_tokens: 350,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: userText }
-      ]
+        { role: "user", content: userText },
+      ],
     });
     const latencyMs = Date.now() - t0;
 
     const aiText = completion.choices?.[0]?.message?.content?.trim() ||
       "Tive um problema ao formular a resposta. Pode tentar novamente?";
 
-    const graphUrl = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+    const graphUrl = `https://graph.facebook.com/v17.0/${process.env.PHONE_NUMBER_ID}/messages`;
     const payload = {
       messaging_product: "whatsapp",
       to: userNumber,
       type: "text",
-      text: { body: aiText }
+      text: { body: aiText },
     };
 
     const r = await fetch(graphUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     let waStatus = "sent";
@@ -187,7 +189,7 @@ Sua missão é ajudar o usuário a controlar os gastos com clareza, objetividade
         waStatus,
         modelUsed: "gpt-4o-mini",
         tokens: "",
-        latency: latencyMs
+        latency: latencyMs,
       });
     } catch (logErr) {
       console.error("Falha ao registrar no Sheets:", logErr);
@@ -212,4 +214,4 @@ export const config = {
     }
   }
 };
-// ================== FIM DO ARQUIVO ==================
+// ============== FIM DO ARQUIVO ==============
