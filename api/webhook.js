@@ -1,4 +1,5 @@
 // api/webhook.js
+
 import express from "express";
 import { processarMensagemZyra } from "./assistantsRouter.js";
 
@@ -6,17 +7,17 @@ const app = express();
 app.use(express.json());
 
 app.all("/webhook", async (req, res) => {
-  // Verificação do webhook (GET da Meta)
+  // Verificação do Webhook (GET da Meta)
   if (req.method === "GET") {
     const mode = req.query["hub.mode"];
     const token = req.query["hub.verify_token"];
     const challenge = req.query["hub.challenge"];
 
     if (mode === "subscribe" && token === "joaolukas2710") {
-      console.log("✅ Webhook verificado com sucesso.");
+      console.log("✅ Webhook verified successfully.");
       return res.status(200).send(challenge);
     } else {
-      console.log("❌ Token de verificação incorreto.");
+      console.log("❌ Invalid verification token.");
       return res.sendStatus(403);
     }
   }
@@ -25,21 +26,23 @@ app.all("/webhook", async (req, res) => {
   if (req.method === "POST") {
     try {
       const body = req.body;
-      const entrada = body?.messages?.[0];
-      if (!entrada) return res.sendStatus(400);
+      const entry = body?.messages?.[0];
+      if (!entry) return res.sendStatus(400);
 
-      const numero = entrada.from;
-      const mensagem = entrada.text?.body;
-      if (!numero || !mensagem) return res.sendStatus(400);
+      const number = entry.from; // Ex: 553499999999
+      const message = entry.text?.body; // Texto da mensagem
 
-      console.log(`📩 Mensagem recebida de ${numero}: ${mensagem}`);
+      if (!number || !message) return res.sendStatus(400);
 
-      const resposta = await processarMensagemZyra(numero, mensagem);
-      await enviarMensagemWhatsApp(numero, resposta);
+      console.log(`📩 Message received from ${number}: ${message}`);
+
+      const response = await processarMensagemZyra(number, message);
+
+      await sendMessageWhatsApp(number, response);
 
       res.sendStatus(200);
-    } catch (erro) {
-      console.error("❌ Erro no webhook:", erro);
+    } catch (error) {
+      console.error("❌ Error in webhook:", error);
       res.sendStatus(500);
     }
   } else {
@@ -47,20 +50,16 @@ app.all("/webhook", async (req, res) => {
   }
 });
 
-// Mock de envio de resposta (substituir pela integração real depois)
-async function enviarMensagemWhatsApp(numero, mensagem) {
-  console.log(`💬 Enviando para ${numero}: ${mensagem}`);
+// Função simulada de envio (substituir por envio real via API depois)
+async function sendMessageWhatsApp(number, message) {
+  console.log(`💬 Sending to ${number}: ${message}`);
+  // Aqui você conecta com sua API real de envio de mensagens
 }
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Webhook rodando na porta ${PORT}`);
+  console.log(`🚀 Webhook server running on port ${PORT}`);
 });
 
 export default app;
 
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor webhook rodando na porta ${PORT}`);
-});
