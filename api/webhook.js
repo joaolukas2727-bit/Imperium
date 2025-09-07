@@ -74,41 +74,45 @@ export default async function handler(req, res) {
     const userText = (msg.text.body || "").trim();
 
     // Caso o usuário pergunte algo como: "quanto gastei este mês com alimentação"
-    const matchConsulta = userText.match(/quanto\\s+gastei.*?(alimentacao|alimentação|transporte|lazer|moradia|educacao|educação|outros)/i);
+    const matchConsulta = userText.match(/quanto\s+gastei.*?(alimentacao|alimentação|transporte|lazer|moradia|educacao|educação|outros)/i);
     if (matchConsulta) {
       const categoria = matchConsulta[1].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      const total = await consultarGastosPorCategoria({ userNumber, categoria, periodo: "mes_atual" });
-      const textoResposta = `Você registrou R$ ${total.toFixed(2).replace('.', ',')} em ${categoria} neste mês. Deseja ver o detalhamento por semana ou adicionar outro gasto?`;
+      try {
+        const total = await consultarGastosPorCategoria({ userNumber, categoria, periodo: "mes_atual" });
+        const textoResposta = `Você registrou R$ ${total.toFixed(2).replace('.', ',')} em ${categoria} neste mês. Deseja ver o detalhamento por semana ou adicionar outro gasto?`;
 
-      const graphUrl = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-      const payload = {
-        messaging_product: "whatsapp",
-        to: userNumber,
-        type: "text",
-        text: { body: textoResposta }
-      };
+        const graphUrl = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+        const payload = {
+          messaging_product: "whatsapp",
+          to: userNumber,
+          type: "text",
+          text: { body: textoResposta }
+        };
 
-      const r = await fetch(graphUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
+        const r = await fetch(graphUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
 
-      await appendToSheet({
-        userNumber,
-        userText,
-        aiText: textoResposta,
-        messageId: msg.id,
-        waStatus: r.ok ? "sent" : `graph_error_${r.status}`,
-        modelUsed: "consulta-direta",
-        tokens: "",
-        latency: 0
-      });
+        await appendToSheet({
+          userNumber,
+          userText,
+          aiText: textoResposta,
+          messageId: msg.id,
+          waStatus: r.ok ? "sent" : `graph_error_${r.status}`,
+          modelUsed: "consulta-direta",
+          tokens: "",
+          latency: 0
+        });
 
-      return res.status(200).json({ status: "sent_consulta_categoria" });
+        return res.status(200).json({ status: "sent_consulta_categoria" });
+      } catch (e) {
+        console.error("Erro ao consultar categoria:", e);
+      }
     }
 
     const systemPrompt = `
