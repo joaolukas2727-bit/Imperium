@@ -13,7 +13,7 @@ export async function consultarGastosPorCategoria({ userNumber, categoria, perio
 
   const { data } = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.SHEET_ID,
-    range: "messages!A:I" // A = timestamp, B = userNumber, C = userText...
+    range: "messages!A:I", // A = timestamp, B = número, C = texto original do usuário, D = resposta
   });
 
   const linhas = data.values || [];
@@ -25,16 +25,18 @@ export async function consultarGastosPorCategoria({ userNumber, categoria, perio
 
   for (const linha of linhas) {
     const [timestamp, numero, entradaUsuario] = linha;
+
     if (!timestamp || !numero || !entradaUsuario) continue;
 
+    // Verifica se o número bate com quem está pedindo
     if (numero !== userNumber) continue;
 
-    // Regex corrigida para capturar frases como "gastei 50 em mercado"
-    const match = entradaUsuario.match(/(gastei|gasto)\s+R?\$?\s?(\d+[\d,.]*)\s+em\s+(.*)/i);
+    // Regex para extrair frases como "gastei R$ 50 com gasolina", "gastei 30 reais em mercado", etc.
+    const match = entradaUsuario.match(/(gastei|gasto)\s+(R\$|\$)?\s?(\d+[\d.,]*)\s+(em|no|na|com)\s+(.+)/i);
     if (!match) continue;
 
-    const valor = parseFloat(match[2].replace(".", "").replace(",", "."));
-    const categoriaInformada = match[3]?.trim().toLowerCase();
+    const valor = parseFloat(match[3].replace(".", "").replace(",", "."));
+    const categoriaInformada = match[5]?.trim().toLowerCase();
 
     if (!categoriaInformada.includes(categoria.toLowerCase())) continue;
 
