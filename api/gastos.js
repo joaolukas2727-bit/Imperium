@@ -13,7 +13,7 @@ export async function consultarGastosPorCategoria({ userNumber, categoria, perio
 
   const { data } = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.SHEET_ID,
-    range: "messages!A:I" // A = timestamp, B = userNumber, C = userText, D = aiText...
+    range: "messages!A:I" // A = timestamp, B = userNumber, C = userText...
   });
 
   const linhas = data.values || [];
@@ -27,11 +27,10 @@ export async function consultarGastosPorCategoria({ userNumber, categoria, perio
     const [timestamp, numero, entradaUsuario] = linha;
     if (!timestamp || !numero || !entradaUsuario) continue;
 
-    // Verifica se o número bate
     if (numero !== userNumber) continue;
 
-    // Confere se a mensagem tem estrutura de gasto
-    const match = entradaUsuario.match(/(gastei|gasto)\\s+R?\\$?\\s?(\\d+[\\d,.]*)\\s+em\\s+(.*)/i);
+    // Regex corrigida para capturar frases como "gastei 50 em mercado"
+    const match = entradaUsuario.match(/(gastei|gasto)\s+R?\$?\s?(\d+[\d,.]*)\s+em\s+(.*)/i);
     if (!match) continue;
 
     const valor = parseFloat(match[2].replace(".", "").replace(",", "."));
@@ -39,7 +38,6 @@ export async function consultarGastosPorCategoria({ userNumber, categoria, perio
 
     if (!categoriaInformada.includes(categoria.toLowerCase())) continue;
 
-    // Verifica se o registro é do mês atual
     const dataLinha = new Date(timestamp);
     if (dataLinha.getMonth() !== mesAtual || dataLinha.getFullYear() !== anoAtual) continue;
 
